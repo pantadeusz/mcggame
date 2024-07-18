@@ -1,10 +1,4 @@
-# mcggame
-Experimental small game project
-
-
-# License
-
-## MIT License with AI exception
+MIT License with AI exception
 
 Copyright (c) Tadeusz Puźniakowski 2024
 
@@ -26,7 +20,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-### Additional restriction
+Additional restriction:
 
 The Software may not be used, in whole or in part, to teach or train any
 artificial intelligence system, including but not limited to large language
