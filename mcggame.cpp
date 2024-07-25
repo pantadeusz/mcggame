@@ -43,27 +43,48 @@ this restriction will be considered a breach of this License.
 
 namespace mcggame {
 
+std::vector<unsigned char> get_pixel(SDL_Surface *surface, int x, int y) {
+    std::vector<unsigned char> ret;   
+    SDL_PixelFormat *format = surface->format;
+    if (x >= surface->w) throw std::invalid_argument("x should be lower than surface width");
+    if (y >= surface->h) throw std::invalid_argument("y should be lower than surface width");
+    if (x < 0) throw std::invalid_argument("x should be non negative");
+    if (y < 0) throw std::invalid_argument("y should be non negative");
+    int bpp = format->BytesPerPixel;
+    int pitch = surface->pitch;
+    unsigned char* pixel_data = (unsigned char*)surface->pixels;
+    unsigned char* row = pixel_data + (pitch*y);
+    for (int i = 0; i < format->BytesPerPixel; i++) ret.push_back(*(row+(x*bpp+i)));
+    return ret;
+}
+
+std::shared_ptr<SDL_Texture> load_texture(SDL_Renderer *_renderer, const std::string fname, std::function<void(SDL_Surface *)> callback = [](SDL_Surface *){}) {
+        SDL_Surface *surface;
+        surface = SDL_LoadBMP(fname.c_str());
+        if (!surface) {
+            throw std::runtime_error(SDL_GetError());
+        }
+        SDL_SetColorKey(surface, SDL_TRUE, 0x0ffff);
+        auto _track_tex = SDL_CreateTextureFromSurface(_renderer, surface);
+        callback(surface);
+
+
+        if (!_track_tex) {
+            throw std::runtime_error(SDL_GetError());
+        }
+        SDL_FreeSurface(surface);
+        return std::shared_ptr<SDL_Texture>(_track_tex, [](auto p){SDL_DestroyTexture(p);});
+}
+
 class race_track_t {
     SDL_Rect _track_dims;
     SDL_Texture *_track_tex;
+    std::shared_ptr<SDL_Texture> _track_tex_p;
     std::vector<unsigned char> _track;
     SDL_Renderer *_renderer;
 public:
 
-    static std::vector<unsigned char> get_pixel(SDL_Surface *surface, int x, int y) {
-        std::vector<unsigned char> ret;   
-        SDL_PixelFormat *format = surface->format;
-        if (x >= surface->w) throw std::invalid_argument("x should be lower than surface width");
-        if (y >= surface->h) throw std::invalid_argument("y should be lower than surface width");
-        if (x < 0) throw std::invalid_argument("x should be non negative");
-        if (y < 0) throw std::invalid_argument("y should be non negative");
-        int bpp = format->BytesPerPixel;
-        int pitch = surface->pitch;
-        unsigned char* pixel_data = (unsigned char*)surface->pixels;
-        unsigned char* row = pixel_data + (pitch*y);
-        for (int i = 0; i < format->BytesPerPixel; i++) ret.push_back(*(row+(x*bpp+i)));
-        return ret;
-    }
+
 
     static std::vector<unsigned char> extract_track_details(SDL_Surface *surface) {
         std::vector<unsigned char> pixels;
@@ -75,7 +96,7 @@ public:
                 u_int64_t *p_p = (u_int64_t *)p.data();
                 *p_p = *p_p & 0x0ffffff;
                 if (*p_p == 0x000ffff) {
-                    std::cout << "r__> " << x << " " << y << std::endl;
+                    // std::cout << "r__> " << x << " " << y << std::endl;
                     attr = 0;
                 }
                 pixels.push_back(attr);
@@ -85,38 +106,38 @@ public:
         return pixels;
     }
 
-    void draw(int cam_x, int cam_y) const {
-            SDL_Rect source_rect = {cam_x-game_view_width/2,cam_y-game_view_height/2,
-            game_view_width,
-                game_view_height};
-            SDL_Rect destination_rect = {0,0,game_view_width,game_view_height};
-            if ((source_rect.x > -game_view_width) && (source_rect.y > -game_view_height)) {
-                if (source_rect.x < 0) {
-                    destination_rect.x = -source_rect.x;
-                    source_rect.w += source_rect.x;
-                    destination_rect.w += source_rect.x;
-                    source_rect.x = 0;
-                }
-                if (source_rect.y < 0) {
-                    destination_rect.y = -source_rect.y;
-                    source_rect.h += source_rect.y;
-                    destination_rect.h += source_rect.y;
-                    source_rect.y = 0;
-                }
+    static position_t to_screen_coordinates(const position_t p, const position_t cam, double scale = 1.0) {
+        auto p2 = (p - cam)*scale;
+        return p2 + position_t{game_view_width*0.5, game_view_height*0.5};
+    }
 
-                if ((source_rect.x+game_view_width) > _track_dims.w) {
-                    source_rect.w -= ((source_rect.x+game_view_width) - _track_dims.w);
-                    destination_rect.w -= ((source_rect.x+game_view_width) - _track_dims.w);
-                }
-                if ((source_rect.y+game_view_height) > _track_dims.h) {
-                    source_rect.h -= ((source_rect.y+game_view_height) - _track_dims.h);
-                    destination_rect.h -= ((source_rect.y+game_view_height) - _track_dims.h);
-                }
+    void draw(double cam_x, double cam_y, double scale = 1.0) const {
+            SDL_Rect source_rect = {0,0,
+            width(),
+                height()};
+            
+            auto draw_dst_pos = to_screen_coordinates({0.0, 0.0}, {cam_x, cam_y}, scale);
+            SDL_Rect destination_rect = {draw_dst_pos[0],
+                                        draw_dst_pos[1],
+                                        (int)(width()*scale),(int)(height()*scale)};
 
+            SDL_RenderCopyEx(_renderer, _track_tex, &source_rect, &destination_rect,
+                                        0, nullptr, SDL_FLIP_NONE);
 
-                SDL_RenderCopyEx(_renderer, _track_tex, &source_rect, &destination_rect,
-                                            0, nullptr, SDL_FLIP_NONE);
-            }
+            auto pp = to_screen_coordinates({cam_x, cam_y}, {cam_x, cam_y}, scale);
+            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
+
+            pp = to_screen_coordinates({0.0, 0.0}, {cam_x, cam_y}, scale);
+            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
+
+            pp = to_screen_coordinates({100.0, 0.0}, {cam_x, cam_y}, scale);
+            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
+
+            pp = to_screen_coordinates({0.0, 100.0}, {cam_x, cam_y}, scale);
+            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
+
+            pp = to_screen_coordinates({100.0, 100.0}, {cam_x, cam_y}, scale);
+            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
     }
 
     int width() const {return _track_dims.w; }
@@ -124,24 +145,17 @@ public:
 
     race_track_t(const std::string fname, SDL_Renderer *renderer) {
         _renderer = renderer;
-        SDL_Surface *surface;
-        surface = SDL_LoadBMP(fname.c_str());
-        if (!surface) {
-            throw std::runtime_error(SDL_GetError());
-        }
-        SDL_SetColorKey(surface, SDL_TRUE, 0x0ffff);
-        _track_tex = SDL_CreateTextureFromSurface(_renderer, surface);
-        _track = extract_track_details(surface);
-        _track_dims = {0,0,surface->w, surface->h};
 
-        if (!_track_tex) {
-            throw std::runtime_error(SDL_GetError());
-        }
-        SDL_FreeSurface(surface);
+
+        _track_tex_p = load_texture(_renderer,fname, [&](SDL_Surface *surface){
+            _track = extract_track_details(surface);
+            _track_dims = {0,0,surface->w, surface->h};
+        });
+
+        _track_tex = _track_tex_p.get();
     }
 
     virtual ~race_track_t() {
-        SDL_DestroyTexture(_track_tex);
     }
 };
 using p_race_track = std::shared_ptr<race_track_t>;
@@ -161,22 +175,48 @@ public:
 
 
 class car_t {
+    SDL_Renderer * _renderer;
     public:
         position_t p;
         position_t v;
         position_t a;
         double alpha;
-    car_t(  position_t p_ = {0.0,0.0}, position_t v_ = {0.0,0.0}, position_t a_ = {0.0,0.0}) {
+        double angle;
+
+        std::shared_ptr<SDL_Texture> texture;
+    car_t(  SDL_Renderer * renderer, const position_t p_ = {0.0,0.0}, const position_t v_ = {0.0,0.0}, const position_t a_ = {0.0,0.0},
+        const std::string car_texture_name = "assets/car_01.bmp") {
+            _renderer = renderer;
+        texture = load_texture(_renderer,car_texture_name);
         p = p_;
         v = v_;
         a = a_;
     }
 
     void update(double dt) {
-        std::array<position_t,3> r = update_phys_point(p,v,a, dt);
+        std::array<position_t,3> r = update_phys_point(p,v, a + calculate_friction_acceleration(a, 0.001), dt);
         p = r[0];
         v = r[1];
         a = r[2];
+        if (~v > 0.0) {
+            auto normv = v*(1.0/~v);
+            angle = std::atan2(normv[1], normv[0]);
+        }
+    }
+    void draw(position_t cam, double scale = 1.0) const {
+
+
+        auto p1 = p - position_t{32.0, 32.0};
+        auto p2 = p + position_t{32.0, 32.0};
+        p1 = race_track_t::to_screen_coordinates(p1,cam,scale);
+        p2 = race_track_t::to_screen_coordinates(p2,cam,scale);
+        auto dp = p2-p1;
+            SDL_Rect destination_rect = {p1[0],
+                                        p1[1],
+                                        dp[0], dp[1]};
+
+            SDL_RenderCopyEx(_renderer, texture.get(), nullptr, &destination_rect,
+                                        (angle/M_PI)*180.0, nullptr, SDL_FLIP_NONE);
     }
 };
 
@@ -188,7 +228,8 @@ int mcg_main(int argc, char *argv[])
         SDL_Event event;
         auto race_track = std::make_shared<race_track_t>("assets/map_01.bmp", renderer);
 
-        car_t car({100.0,100.0}, {100.0, 160.0});
+        car_t car(renderer, {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp");
+        double scale = 1.0;
         bool game_continues = true;
         while (game_continues) {
             while(SDL_PollEvent(&event)) {
@@ -196,13 +237,21 @@ int mcg_main(int argc, char *argv[])
                     game_continues = false;
                 }
             }
-
+            auto keyboard_state = SDL_GetKeyboardState(nullptr);
+            car.a = {0.0,0.0};
+            if (keyboard_state[SDL_SCANCODE_RIGHT]) car.a[0] += 100;
+            if (keyboard_state[SDL_SCANCODE_LEFT]) car.a[0] -= 100;
+            if (keyboard_state[SDL_SCANCODE_UP]) car.a[1] -= 100;
+            if (keyboard_state[SDL_SCANCODE_DOWN]) car.a[1] += 100;
+            if (keyboard_state[SDL_SCANCODE_INSERT]) scale *= 1.1;
+            if (keyboard_state[SDL_SCANCODE_DELETE]) scale *= 0.9;
             car.update(0.01);
 
             SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0x00);
             SDL_RenderClear(renderer);
 
-            race_track->draw(car.p[0], car.p[1]);
+            race_track->draw(car.p[0], car.p[1],scale);//, 1.5);//+0.5*std::sin(car.p[0]/100.0));
+            car.draw(car.p,scale);
             
             SDL_RenderPresent(renderer);
             SDL_Delay(10);

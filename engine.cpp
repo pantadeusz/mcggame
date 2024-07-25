@@ -34,6 +34,7 @@ this restriction will be considered a breach of this License.
 #include "engine.h"
 #include "graphics.h"
 #include <stdexcept>
+#include <cmath>
 
 namespace mcggame {
 
@@ -74,12 +75,30 @@ position_t operator/(const position_t &a, const double &b) {
     return {a[0]/b,a[1]/b};
 }
 
+/**
+ * @brief Calculates lenght of a vector
+ * 
+ * @param a vector
+ * @return double length of the vector
+ */
+double operator~(const position_t &a) {
+    auto v = a[0]*a[0] + a[1]*a[1];
+    return std::sqrt(v);
+}
+
+
 std::array<position_t,3> update_phys_point(position_t p, position_t v, position_t a, const double dt) {
     std::array<position_t,3> updated = {p,v,a};
     updated[0] = p + v * dt + a*dt*dt/2.0;
     updated[1] = v + a*dt;
     updated[2] = a;
     return updated;
+}
+position_t calculate_friction_acceleration(position_t v, const double coefficient) {
+    position_t a = {0.0,0.0};
+    double l = ~a;
+    if (l == 0.0) return {0.0,0.0};
+    return a*(-coefficient);
 }
 
 
