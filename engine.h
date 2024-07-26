@@ -46,8 +46,8 @@ this restriction will be considered a breach of this License.
 
 namespace mcggame {
 
-const int game_view_width = 320;
-const int game_view_height = 200;
+const int game_view_width = 640;
+const int game_view_height = 480;
 
 void game_context(const std::function<void(SDL_Renderer *renderer)> &game_main);
 
@@ -61,8 +61,17 @@ position_t operator+(const position_t &a, const position_t &b);
 position_t operator-(const position_t &a, const position_t &b);
 position_t operator*(const position_t &a, const double &b);
 position_t operator/(const position_t &a, const double &b);
+
 std::ostream &operator<<(std::ostream &o, const position_t &a);
 double operator~(const position_t &a);
+
+position_t rotate_around(const position_t &p, const double &angle, const position_t &d = {0,0});
+double angle_between_vectors(const position_t& v1,
+                              const position_t& v2);
+double angle_between_shapes(const std::vector<position_t>& shape1,
+                              const std::vector<position_t>& shape2);
+double angle_crop_to_range(double a);
+
 std::array<position_t,3> update_phys_point(position_t p, position_t v, position_t a, const double dt);
 position_t calculate_friction_acceleration(position_t v, const double coefficient) ;
 

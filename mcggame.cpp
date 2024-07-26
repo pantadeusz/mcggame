@@ -41,6 +41,8 @@ this restriction will be considered a breach of this License.
 #include <iostream>
 #include <array>
 #include <map>
+#include <iomanip>
+
 
 namespace mcggame {
 
@@ -124,21 +126,6 @@ public:
 
             SDL_RenderCopyEx(_renderer, _track_tex, &source_rect, &destination_rect,
                                         0, nullptr, SDL_FLIP_NONE);
-
-            auto pp = to_screen_coordinates({cam_x, cam_y}, {cam_x, cam_y}, scale);
-            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
-
-            pp = to_screen_coordinates({0.0, 0.0}, {cam_x, cam_y}, scale);
-            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
-
-            pp = to_screen_coordinates({100.0, 0.0}, {cam_x, cam_y}, scale);
-            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
-
-            pp = to_screen_coordinates({0.0, 100.0}, {cam_x, cam_y}, scale);
-            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
-
-            pp = to_screen_coordinates({100.0, 100.0}, {cam_x, cam_y}, scale);
-            SDL_RenderDrawLine(_renderer, pp[0], pp[1],pp[0]+10,pp[1]+10);
     }
 
     int width() const {return _track_dims.w; }
@@ -162,27 +149,20 @@ public:
 using p_race_track = std::shared_ptr<race_track_t>;
 
 
-class race_t {
-    p_race_track _race_track;
-public:
-    race_t(p_race_track rt) {
-        _race_track = rt;
-    }
-
-    void draw() {
-        _race_track->draw(100,100);
-    }
+struct input_state_t {
+    position_t p;
 };
 
 class input_i {
 public:
-    virtual position_t get_state() const = 0;
+    virtual input_state_t get_state() const = 0;
 };
 
 
 class car_t {
     SDL_Renderer * _renderer;
     public:
+        std::shared_ptr<std::vector<position_t>> wheels;
         position_t p;
         position_t v;
         position_t a;
@@ -193,28 +173,64 @@ class car_t {
 
         std::shared_ptr<input_i> input;
 
-    car_t(  SDL_Renderer * renderer, std::shared_ptr<input_i> input_, const position_t p_ = {0.0,0.0}, const position_t v_ = {0.0,0.0}, const position_t a_ = {0.0,0.0},
-        const std::string car_texture_name = "assets/car_01.bmp") {
-            input = input_;
-            _renderer = renderer;
-        texture = load_texture(_renderer,car_texture_name);
-        p = p_;
-        v = v_;
-        a = a_;
+    static car_t create( SDL_Renderer * renderer, 
+            std::shared_ptr<input_i> input_,
+            const position_t p_ = {0.0,0.0},
+            const position_t v_ = {0.0,0.0},
+            const position_t a_ = {0.0,0.0},
+            const std::string car_texture_name = "assets/car_01.bmp") 
+    {
+        car_t ret;
+        
+        ret.input = input_;
+        ret._renderer = renderer;
+        ret.texture = load_texture(renderer, car_texture_name);
+        ret.p = p_;
+        ret.v = v_;
+        ret.a = a_;
+        ret.wheels = std::make_shared<std::vector<position_t>>();
+        ret.wheels->push_back({30.0,0.0});
+        ret.wheels->push_back({-30.0,0.0});
+
+        return ret;
     }
 
-    void update(double dt) {
-        auto accel = calculate_friction_acceleration(v, 0.5);
-        std::cout << accel << std::endl;
-        std::array<position_t,3> r = update_phys_point(p,v, input->get_state() + accel, dt);
-        p = r[0];
-        v = r[1];
-        a = r[2];
-        if (~v > 0.0) {
+    
+    car_t update(double dt) const {
+        car_t ret = *this;
+
+
+        auto friction = calculate_friction_acceleration(v, 0.5);
+        auto input_v = input->get_state();
+        ret.angle = angle_crop_to_range(angle + input_v.p[0]*0.0001*~v);
+        auto forward_vector = rotate_around({1.0,0.0}, ret.angle);
+        auto forward_acceleration = forward_vector * input_v.p[1]*160.0;
+        
+        // if (~v > 0.0001) {
+        //     auto angle_to_correct = angle_between_vectors(forward_vector, v);
+        //     auto movement_correction_angle = angle_to_correct * ((~v > 1.0)?0.02:0.9);
+        //     if ((~v > 100.0) && (std::abs(angle_to_correct ) > 0.001)) {
+        //         std::cout << "drifting " << ~v << std::endl;
+        //         friction = calculate_friction_acceleration(v, 0.9);
+        //     }
+        //     ret.v = rotate_around(ret.v,-movement_correction_angle);
+        // }
+        
+      
+        std::array<position_t,3> r = update_phys_point(p, ret.v, forward_acceleration + friction, dt);
+        ret.p = r[0];
+        ret.v = r[1];
+        ret.a = r[2];
+        /*if (~v > 0.0) {
             auto normv = v*(1.0/~v);
-            angle = std::atan2(normv[1], normv[0]);
+            ret.angle = std::atan2(normv[1], normv[0]);
+        } */
+        if (~ret.v < 0.005) {
+            ret.v = {0.0,0.0};
         }
+        return ret;
     }
+
     void draw(position_t cam, double scale = 1.0) const {
 
 
@@ -237,14 +253,14 @@ class car_t {
 
 class input_keyboard_c : public input_i {
 public:
-    position_t get_state() const {
+    input_state_t get_state() const {
         auto keyboard_state = SDL_GetKeyboardState(nullptr);
         position_t a = {0.0,0.0};
-        if (keyboard_state[SDL_SCANCODE_RIGHT]) a[0] += 100;
-        if (keyboard_state[SDL_SCANCODE_LEFT]) a[0] -= 100;
-        if (keyboard_state[SDL_SCANCODE_UP]) a[1] -= 100;
-        if (keyboard_state[SDL_SCANCODE_DOWN]) a[1] += 100;
-        return a;
+        if (keyboard_state[SDL_SCANCODE_RIGHT]) a[0] += 1;
+        if (keyboard_state[SDL_SCANCODE_LEFT]) a[0] -= 1;
+        if (keyboard_state[SDL_SCANCODE_UP]) a[1] += 1;
+        if (keyboard_state[SDL_SCANCODE_DOWN]) a[1] -= 1;
+        return {a};
     };
 };
 
@@ -255,7 +271,7 @@ int mcg_main(int argc, char *argv[])
         SDL_Event event;
         auto race_track = std::make_shared<race_track_t>("assets/map_01.bmp", renderer);
 
-        car_t car(renderer, std::make_shared<input_keyboard_c>(), {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp");
+        car_t car = car_t::create(renderer, std::make_shared<input_keyboard_c>(), {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp");
         std::map<Sint32,car_t> cars;
         
         position_t camera_position = {};
@@ -278,7 +294,8 @@ int mcg_main(int argc, char *argv[])
             auto keyboard_state = SDL_GetKeyboardState(nullptr);
             if (keyboard_state[SDL_SCANCODE_INSERT]) scale *= 1.1;
             if (keyboard_state[SDL_SCANCODE_DELETE]) scale *= 0.9;
-            car.update(0.01);
+            
+            car = car.update(0.01);
 
             SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0x00);
             SDL_RenderClear(renderer);
@@ -320,3 +337,33 @@ int main(int argc, char *argv[])
 {
     mcggame::mcg_main(argc, argv);
 }
+
+
+
+/*
+using namespace mcggame;
+
+
+
+int main() {
+
+
+    for (double i = -M_PI; i < M_PI; i+= 0.02) {
+        double rotation_angle = angle_between_vectors({0.0,10.0},rotate_around({0.0,10.0},i));
+        std::cout << "Rotation angle: " << std::fixed << std::setprecision(4) << rotation_angle << "  VS " << i <<  std::endl;
+    }
+    for (double i = -M_PI; i < M_PI; i+= 0.02) {
+        std::vector<position_t> shape1 = {{-32,-28}, {32,-28}, {32,28}, {-32,28}};
+        std::vector<position_t> shape2 = {{-33,-27}, {32,-28}, {32,28}, {-32,28}};
+
+        for (auto & p : shape2) {
+            p = rotate_around(p, i);
+        }
+
+        double rotation_angle = angle_between_shapes(shape1, shape2);
+
+        std::cout << "Rotation angle (shapes): " << std::fixed << std::setprecision(4) << rotation_angle << "   (should be: " << i << " )" << std::endl;
+    }
+    return 0;
+}
+*/
