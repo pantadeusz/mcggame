@@ -40,6 +40,7 @@ this restriction will be considered a breach of this License.
 
 #include <functional>
 #include <array>
+#include <ostream>
 
 
 
@@ -60,6 +61,7 @@ position_t operator+(const position_t &a, const position_t &b);
 position_t operator-(const position_t &a, const position_t &b);
 position_t operator*(const position_t &a, const double &b);
 position_t operator/(const position_t &a, const double &b);
+std::ostream &operator<<(std::ostream &o, const position_t &a);
 double operator~(const position_t &a);
 std::array<position_t,3> update_phys_point(position_t p, position_t v, position_t a, const double dt);
 position_t calculate_friction_acceleration(position_t v, const double coefficient) ;

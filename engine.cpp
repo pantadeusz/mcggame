@@ -42,7 +42,7 @@ void game_context(const std::function<void(SDL_Renderer *renderer)> &game_main) 
     SDL_Window *window;
     SDL_Renderer *renderer;
 
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) < 0) {
         throw std::runtime_error(SDL_GetError());
     }
 
@@ -75,6 +75,12 @@ position_t operator/(const position_t &a, const double &b) {
     return {a[0]/b,a[1]/b};
 }
 
+
+std::ostream &operator<<(std::ostream &o, const position_t &a) {
+    o << "[ " << a[0] << " " << a[1] << " ]";
+    return o;
+}
+
 /**
  * @brief Calculates lenght of a vector
  * 
@@ -95,10 +101,11 @@ std::array<position_t,3> update_phys_point(position_t p, position_t v, position_
     return updated;
 }
 position_t calculate_friction_acceleration(position_t v, const double coefficient) {
-    position_t a = {0.0,0.0};
-    double l = ~a;
+    //position_t a = {0.0,0.0};
+    double l = ~v;
     if (l == 0.0) return {0.0,0.0};
-    return a*(-coefficient);
+    //a = v*1/l;
+    return v*(-coefficient);
 }
 
 

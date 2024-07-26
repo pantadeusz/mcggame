@@ -40,6 +40,7 @@ this restriction will be considered a breach of this License.
 #include <vector>
 #include <iostream>
 #include <array>
+#include <map>
 
 namespace mcggame {
 
@@ -173,6 +174,11 @@ public:
     }
 };
 
+class input_i {
+public:
+    virtual position_t get_state() const = 0;
+};
+
 
 class car_t {
     SDL_Renderer * _renderer;
@@ -184,8 +190,12 @@ class car_t {
         double angle;
 
         std::shared_ptr<SDL_Texture> texture;
-    car_t(  SDL_Renderer * renderer, const position_t p_ = {0.0,0.0}, const position_t v_ = {0.0,0.0}, const position_t a_ = {0.0,0.0},
+
+        std::shared_ptr<input_i> input;
+
+    car_t(  SDL_Renderer * renderer, std::shared_ptr<input_i> input_, const position_t p_ = {0.0,0.0}, const position_t v_ = {0.0,0.0}, const position_t a_ = {0.0,0.0},
         const std::string car_texture_name = "assets/car_01.bmp") {
+            input = input_;
             _renderer = renderer;
         texture = load_texture(_renderer,car_texture_name);
         p = p_;
@@ -194,7 +204,9 @@ class car_t {
     }
 
     void update(double dt) {
-        std::array<position_t,3> r = update_phys_point(p,v, a + calculate_friction_acceleration(a, 0.001), dt);
+        auto accel = calculate_friction_acceleration(v, 0.5);
+        std::cout << accel << std::endl;
+        std::array<position_t,3> r = update_phys_point(p,v, input->get_state() + accel, dt);
         p = r[0];
         v = r[1];
         a = r[2];
@@ -221,6 +233,21 @@ class car_t {
 };
 
 
+
+
+class input_keyboard_c : public input_i {
+public:
+    position_t get_state() const {
+        auto keyboard_state = SDL_GetKeyboardState(nullptr);
+        position_t a = {0.0,0.0};
+        if (keyboard_state[SDL_SCANCODE_RIGHT]) a[0] += 100;
+        if (keyboard_state[SDL_SCANCODE_LEFT]) a[0] -= 100;
+        if (keyboard_state[SDL_SCANCODE_UP]) a[1] -= 100;
+        if (keyboard_state[SDL_SCANCODE_DOWN]) a[1] += 100;
+        return a;
+    };
+};
+
 int mcg_main(int argc, char *argv[])
 {
 
@@ -228,21 +255,27 @@ int mcg_main(int argc, char *argv[])
         SDL_Event event;
         auto race_track = std::make_shared<race_track_t>("assets/map_01.bmp", renderer);
 
-        car_t car(renderer, {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp");
+        car_t car(renderer, std::make_shared<input_keyboard_c>(), {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp");
+        std::map<Sint32,car_t> cars;
+        
+        position_t camera_position = {};
         double scale = 1.0;
         bool game_continues = true;
         while (game_continues) {
             while(SDL_PollEvent(&event)) {
                 if (event.type == SDL_QUIT) {
                     game_continues = false;
+                } else if (event.type == SDL_JOYDEVICEADDED) {
+                    std::cout << "Joistick added" << event.jdevice.type << " : " << event.jdevice.which <<  std::endl;
+                } else if (event.type == SDL_JOYDEVICEREMOVED) {
+                    std::cout << "Joistick removed" << event.jdevice.type << " : " << event.jdevice.which <<  std::endl;
+                } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
+                    std::cout << "Controller added" << event.cdevice.type << " : " << event.cdevice.which <<  std::endl;
+                } else if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
+                    std::cout << "Controller removed" << event.cdevice.type << " : " << event.cdevice.which <<  std::endl;
                 }
             }
             auto keyboard_state = SDL_GetKeyboardState(nullptr);
-            car.a = {0.0,0.0};
-            if (keyboard_state[SDL_SCANCODE_RIGHT]) car.a[0] += 100;
-            if (keyboard_state[SDL_SCANCODE_LEFT]) car.a[0] -= 100;
-            if (keyboard_state[SDL_SCANCODE_UP]) car.a[1] -= 100;
-            if (keyboard_state[SDL_SCANCODE_DOWN]) car.a[1] += 100;
             if (keyboard_state[SDL_SCANCODE_INSERT]) scale *= 1.1;
             if (keyboard_state[SDL_SCANCODE_DELETE]) scale *= 0.9;
             car.update(0.01);
