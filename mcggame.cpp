@@ -42,6 +42,9 @@ this restriction will be considered a breach of this License.
 #include <array>
 #include <map>
 #include <iomanip>
+#include <chrono>
+#include <thread>
+#include <tuple>
 
 
 namespace mcggame {
@@ -69,8 +72,8 @@ std::shared_ptr<SDL_Texture> load_texture(SDL_Renderer *_renderer, const std::st
         }
         SDL_SetColorKey(surface, SDL_TRUE, 0x0ffff);
         auto _track_tex = SDL_CreateTextureFromSurface(_renderer, surface);
-        callback(surface);
 
+        callback(surface);
 
         if (!_track_tex) {
             throw std::runtime_error(SDL_GetError());
@@ -79,35 +82,52 @@ std::shared_ptr<SDL_Texture> load_texture(SDL_Renderer *_renderer, const std::st
         return std::shared_ptr<SDL_Texture>(_track_tex, [](auto p){SDL_DestroyTexture(p);});
 }
 
-class race_track_t {
-    SDL_Rect _track_dims;
-    SDL_Texture *_track_tex;
-    std::shared_ptr<SDL_Texture> _track_tex_p;
-    std::vector<unsigned char> _track;
-    SDL_Renderer *_renderer;
-public:
+struct logic_bitmap_t {
+    int w;
+    int h;
+    std::vector<unsigned char> bitmap;
+    unsigned char &operator()(const int x, const int y){
+        static unsigned char placeholder = 0;
+        if ( (x >= 0) && (x < (w)) &&
+                 (y >= 0) && (y < (h)) ) return bitmap[y*w+x];
+        else
+            return placeholder;
+    }
+    unsigned char operator()(const int x, const int y) const {
+        if ( (x >= 0) && (x < (w)) &&
+                 (y >= 0) && (y < (h)) ) return bitmap[y*w+x];
+        else
+            return 0;
+    }
 
-
-
-    static std::vector<unsigned char> extract_track_details(SDL_Surface *surface) {
-        std::vector<unsigned char> pixels;
+    static logic_bitmap_t from_surface(SDL_Surface *surface, std::function<unsigned char(int x, int y, u_int64_t v)> callback = [](int x, int y, u_int64_t v){return (unsigned char)(v&0x0ff);}) {
+        logic_bitmap_t ret;
+        ret.w = surface->w;
+        ret.h = surface->h;
+        ret.bitmap.reserve(ret.w*ret.h);
         for (int y = 0; y < surface->h; ++y) {
             for (int x = 0; x < surface->w; ++x) {
                 unsigned char attr = 255;
                 auto p = get_pixel(surface, x, y);
                 for (int i = 0; i < 4-p.size(); i++) p.push_back(0);
                 u_int64_t *p_p = (u_int64_t *)p.data();
-                *p_p = *p_p & 0x0ffffff;
-                if (*p_p == 0x000ffff) {
-                    // std::cout << "r__> " << x << " " << y << std::endl;
-                    attr = 0;
-                }
-                pixels.push_back(attr);
+                attr = callback(x,y,*p_p);
+                ret.bitmap.push_back(attr);
             }
         }
 
-        return pixels;
+        return ret;
     }
+};
+
+class race_track_t {
+    SDL_Texture *_track_tex;
+    std::shared_ptr<SDL_Texture> _track_tex_p;
+    SDL_Renderer *_renderer;
+    
+public:
+
+    logic_bitmap_t _collision_map;
 
     static position_t to_screen_coordinates(const position_t p, const position_t cam, double scale = 1.0) {
         auto p2 = (p - cam)*scale;
@@ -117,27 +137,32 @@ public:
     void draw(double cam_x, double cam_y, double scale = 1.0) const {
             SDL_Rect source_rect = {0,0,
             width(),
-                height()};
+            height()};
             
             auto draw_dst_pos = to_screen_coordinates({0.0, 0.0}, {cam_x, cam_y}, scale);
-            SDL_Rect destination_rect = {draw_dst_pos[0],
-                                        draw_dst_pos[1],
+            SDL_Rect destination_rect = {(int)draw_dst_pos[0],
+                                        (int)draw_dst_pos[1],
                                         (int)(width()*scale),(int)(height()*scale)};
 
             SDL_RenderCopyEx(_renderer, _track_tex, &source_rect, &destination_rect,
                                         0, nullptr, SDL_FLIP_NONE);
     }
 
-    int width() const {return _track_dims.w; }
-    int height() const {return _track_dims.h; }    
+    int width() const {return _collision_map.w; }
+    int height() const {return _collision_map.h; }    
 
     race_track_t(const std::string fname, SDL_Renderer *renderer) {
         _renderer = renderer;
 
 
         _track_tex_p = load_texture(_renderer,fname, [&](SDL_Surface *surface){
-            _track = extract_track_details(surface);
-            _track_dims = {0,0,surface->w, surface->h};
+            _collision_map = logic_bitmap_t::from_surface(surface, [](int x, int y, u_int64_t v){
+                v = v & 0x0ffffff;
+                if (v == 0x000ffff) {
+                    return 0; // no collision
+                }
+                return 255; // collision
+            });
         });
 
         _track_tex = _track_tex_p.get();
@@ -158,6 +183,30 @@ public:
     virtual input_state_t get_state() const = 0;
 };
 
+double radius_to_correct_point(const position_t &p, const std::shared_ptr<race_track_t> race_track) {
+    if (race_track->_collision_map(p[0],p[1]) != 255) return 0;
+    for (double r = 1.0; r < 16; r+= 1.0) {
+        for (double a = 0.0; a < 2.0; a += 0.25) {
+            auto np = p;
+            np[0] += r*std::sin(a*M_PI);
+            np[1] += r*std::cos(a*M_PI);
+            if (race_track->_collision_map(np[0],np[1]) != 255) return r;
+        }
+    }
+    return 1000.0;
+}
+
+std::vector<position_t> check_collision(const std::vector<position_t> &collision_pts, position_t p, double angle,const logic_bitmap_t &collision_map) {
+    std::vector<position_t> in_collision;
+    for (auto hp: collision_pts) {
+        auto orig_hp = hp;
+        hp = rotate_around(hp,angle) + p;
+        if (collision_map(hp[0],hp[1]) == 255)
+            //in_collision.push_back(orig_hp);
+            in_collision.push_back(hp);
+    }
+    return in_collision;
+}
 
 class car_t {
     SDL_Renderer * _renderer;
@@ -166,12 +215,13 @@ class car_t {
         position_t p;
         position_t v;
         position_t a;
-        double alpha;
         double angle;
 
         std::shared_ptr<SDL_Texture> texture;
 
         std::shared_ptr<input_i> input;
+
+        std::shared_ptr<std::vector<position_t>> collision_pts;
 
     static car_t create( SDL_Renderer * renderer, 
             std::shared_ptr<input_i> input_,
@@ -192,9 +242,17 @@ class car_t {
         ret.wheels->push_back({30.0,0.0});
         ret.wheels->push_back({-30.0,0.0});
 
+        std::vector<position_t> cp;
+        for (double x = -32; x <= 32; x+= 8.0)
+        for (double y = -16; y <= 16; y+= 8.0) {
+            cp.push_back({x,y});
+        }
+        ret.collision_pts = std::make_shared<std::vector<position_t>>(cp);
+
         return ret;
     }
 
+    
     
     car_t update(double dt) const {
         car_t ret = *this;
@@ -204,27 +262,26 @@ class car_t {
         auto input_v = input->get_state();
         ret.angle = angle_crop_to_range(angle + input_v.p[0]*0.0001*~v);
         auto forward_vector = rotate_around({1.0,0.0}, ret.angle);
+        auto backward_vector = rotate_around({-1.0,0.0}, ret.angle);
         auto forward_acceleration = forward_vector * input_v.p[1]*160.0;
         
-        // if (~v > 0.0001) {
-        //     auto angle_to_correct = angle_between_vectors(forward_vector, v);
-        //     auto movement_correction_angle = angle_to_correct * ((~v > 1.0)?0.02:0.9);
-        //     if ((~v > 100.0) && (std::abs(angle_to_correct ) > 0.001)) {
-        //         std::cout << "drifting " << ~v << std::endl;
-        //         friction = calculate_friction_acceleration(v, 0.9);
-        //     }
-        //     ret.v = rotate_around(ret.v,-movement_correction_angle);
-        // }
+        if (~v > 0.0001) {
+            auto angle_to_correct_a = angle_between_vectors(forward_vector, v);
+            auto angle_to_correct_b = angle_between_vectors(backward_vector, v);
+            auto angle_to_correct = (std::abs(angle_to_correct_a) < std::abs(angle_to_correct_b))?angle_to_correct_a:angle_to_correct_b;
+            auto movement_correction_angle = angle_to_correct * ((~v > 1.0)?0.02:0.9);
+            if ((~v > 100.0) && (std::abs(angle_to_correct ) > 0.001)) {
+                // std::cout << "drifting " << ~v << std::endl;
+                friction = calculate_friction_acceleration(v, 0.9);
+            }
+            ret.v = rotate_around(ret.v,-movement_correction_angle);
+        }
         
       
         std::array<position_t,3> r = update_phys_point(p, ret.v, forward_acceleration + friction, dt);
         ret.p = r[0];
         ret.v = r[1];
         ret.a = r[2];
-        /*if (~v > 0.0) {
-            auto normv = v*(1.0/~v);
-            ret.angle = std::atan2(normv[1], normv[0]);
-        } */
         if (~ret.v < 0.005) {
             ret.v = {0.0,0.0};
         }
@@ -239,16 +296,28 @@ class car_t {
         p1 = race_track_t::to_screen_coordinates(p1,cam,scale);
         p2 = race_track_t::to_screen_coordinates(p2,cam,scale);
         auto dp = p2-p1;
-            SDL_Rect destination_rect = {p1[0],
-                                        p1[1],
-                                        dp[0], dp[1]};
+            SDL_Rect destination_rect = {(int)p1[0],
+                                         (int)p1[1],
+                                         (int)dp[0],
+                                         (int)dp[1]};
 
             SDL_RenderCopyEx(_renderer, texture.get(), nullptr, &destination_rect,
                                         (angle/M_PI)*180.0, nullptr, SDL_FLIP_NONE);
     }
 };
 
+car_t place_car_on_race_track(const race_track_t &race_track, const car_t &car) {
+    car_t ct = car;
 
+    for (double x = 0; x < race_track.width(); x+= 2.0) {
+    for (double y = 0; y < race_track.height(); y+= 2.0) {
+        ct.p = {x,y};
+        std::vector<position_t> collisions = check_collision(*ct.collision_pts.get(), ct.p, ct.angle,race_track._collision_map);
+        if (collisions.size() == 0) return ct;
+    }
+    }
+    throw std::invalid_argument("could not place car on map due to not enough free space on the map");
+}
 
 
 class input_keyboard_c : public input_i {
@@ -264,10 +333,98 @@ public:
     };
 };
 
+namespace heuristic {
+
+std::pair<double,std::vector<position_t>> goal_collision(const car_t &new_car, const car_t &current_car, const std::shared_ptr<race_track_t> race_track) {
+    auto collision_points = check_collision(*(new_car.collision_pts).get(), new_car.p, new_car.angle,race_track->_collision_map);
+    double diff_angle = std::abs(angle_between_vectors(rotate_around({1.0,0.0}, new_car.angle), rotate_around({1.0,0.0}, current_car.angle)));
+    double diff_position = ~(new_car.p - current_car.p);
+    double sum_col = 0.0;
+    for (auto &p: collision_points) {
+        sum_col += (radius_to_correct_point(p,race_track))*2.0;
+    }
+    if (sum_col > 0.0) sum_col += 100.0;
+    return {diff_angle*4.0 + std::sqrt(diff_position+3.0) + sum_col,collision_points};
+
+}
+
+std::vector<car_t> generate_neighbors(car_t c) {
+    std::vector<car_t> ret;
+    car_t tmp = c;
+    tmp.angle += 0.04;
+    ret.push_back(tmp);
+    tmp = c;
+    tmp.angle -= 0.04;
+    ret.push_back(tmp);
+    tmp = c;
+    tmp.p[0] -= 1.0;
+    ret.push_back(tmp);
+    tmp = c;
+    tmp.p[0] += 1.0;
+    ret.push_back(tmp);
+    tmp = c;
+    tmp.p[1] -= 1.0;
+    ret.push_back(tmp);
+    tmp = c;
+    tmp.p[1] += 1.0;
+    ret.push_back(tmp);
+
+    tmp = c;
+    tmp.p[0] -= 0.6;
+    tmp.p[1] -= 0.6;
+    ret.push_back(tmp);
+
+    tmp = c;
+    tmp.p[0] += 0.6;
+    tmp.p[1] -= 0.6;
+    ret.push_back(tmp);
+
+    tmp = c;
+    tmp.p[0] += 0.6;
+    tmp.p[1] += 0.6;
+    ret.push_back(tmp);
+
+    tmp = c;
+    tmp.p[0] += 0.6;
+    tmp.p[1] -= 0.6;
+    ret.push_back(tmp);
+
+    return ret;
+}
+
+std::pair<car_t,std::vector<position_t>> find_best_corrected_position(car_t car_to_fix, const std::shared_ptr<race_track_t> race_track) {
+    auto best_car = car_to_fix;
+    auto [best_goal, collision_points] = goal_collision(best_car, car_to_fix, race_track);
+
+    for (int i = 0; i < 200; i++) {
+            auto neighbors = generate_neighbors(best_car);
+            bool no_better = true;
+            for (auto &c_car : neighbors)             {
+                auto [c_goal, c_collision_points] = goal_collision(c_car, car_to_fix, race_track);
+                if (c_goal < best_goal) {
+                    best_goal = c_goal;
+                    best_car = c_car;
+                    collision_points = c_collision_points;
+                    no_better = false;
+                }
+            }
+            if (no_better) {
+                std::cout << "no better " << i << std::endl;
+                break;
+            }
+    }
+    return {best_car, collision_points};
+}
+}
+
 int mcg_main(int argc, char *argv[])
 {
+    const double dt = 0.01;
 
-    game_context([](SDL_Renderer *renderer){
+    game_context([=](SDL_Renderer *renderer){
+        using namespace std;
+        using namespace std::chrono;
+
         SDL_Event event;
         auto race_track = std::make_shared<race_track_t>("assets/map_01.bmp", renderer);
 
@@ -277,6 +434,11 @@ int mcg_main(int argc, char *argv[])
         position_t camera_position = {};
         double scale = 1.0;
         bool game_continues = true;
+
+        car = place_car_on_race_track(*race_track.get(),car);
+        high_resolution_clock::time_point current_time = high_resolution_clock::now();
+        std::vector<position_t> collisions_draw;
+        std::cout << "Game loop start" <<std::endl;
         while (game_continues) {
             while(SDL_PollEvent(&event)) {
                 if (event.type == SDL_QUIT) {
@@ -295,28 +457,65 @@ int mcg_main(int argc, char *argv[])
             if (keyboard_state[SDL_SCANCODE_INSERT]) scale *= 1.1;
             if (keyboard_state[SDL_SCANCODE_DELETE]) scale *= 0.9;
             
-            car = car.update(0.01);
+            auto new_car = car.update(dt);
+
+            std::vector<position_t> collisions = check_collision(*new_car.collision_pts.get(), new_car.p, new_car.angle,race_track->_collision_map);
+            if (collisions.size() > 0) {
+               collisions_draw = collisions;
+
+
+                auto [nncar, collisions] = heuristic::find_best_corrected_position(new_car, race_track);
+                if (collisions.size() == 0) { 
+                    std::cout << "fixed: " << car.p << " " << car.angle << " to " << nncar.p << " " << nncar.angle << std::endl;
+                    car = nncar; // this is the correct car position
+                    car.v = car.v * 0.98;
+                    auto velocity = ~car.v;
+                    if (velocity > 0.0001) {
+                        auto intended_move_vector = new_car.p - car.p;
+                        auto actual_move_vector = nncar.p - car.p;
+                        auto fix_vector = actual_move_vector - intended_move_vector;
+                        if ((~fix_vector > 0.001) && (~actual_move_vector > 0.001)) {
+                            intended_move_vector = intended_move_vector *(1.0/~intended_move_vector);
+                            actual_move_vector = actual_move_vector *(1.0/~actual_move_vector);
+                            auto move_vector_mirrored = actual_move_vector + fix_vector;
+                            car.v = (move_vector_mirrored * 1.0/~move_vector_mirrored) * velocity;
+                        } else {
+                            auto nv1 = rotate_around({1.0,0.0},car.angle)*~car.v;
+                            auto nv2 = nv1*-1.0;
+                            car.v = (~(nv1-car.v) < ~(nv2-car.v))?nv1:nv2;
+                        }
+                    }
+                } else {
+                    std::cout << "not fixed: " << car.p << " " << car.angle << " to " << nncar.p << " " << nncar.angle << "   c: " << collisions.size() <<  std::endl;
+                    car.v = {0.0, 0.0};
+                }
+            } else {
+                car = new_car;
+            }
+
+            camera_position = {car.p[0], car.p[1]};
 
             SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0x00);
             SDL_RenderClear(renderer);
 
-            race_track->draw(car.p[0], car.p[1],scale);//, 1.5);//+0.5*std::sin(car.p[0]/100.0));
-            car.draw(car.p,scale);
-            
+            SDL_SetRenderDrawColor(renderer, 0xff, 0x00, 0x00, 0xff);
+
+
+            race_track->draw(camera_position[0], camera_position[1],scale);
+            car.draw(camera_position, scale);
+
+            // for (auto p: collisions_draw) {
+            //     p = race_track_t::to_screen_coordinates(p, camera_position, scale);
+            //     SDL_RenderDrawPoint(renderer, p[0], p[1]);
+            //     std:: cout << p << "  " << camera_position << std::endl;
+            // }
+
+
             SDL_RenderPresent(renderer);
-            SDL_Delay(10);
-            if (car.p[0] >= race_track->width()) {
-                car.v[0] = -100.0;
-            }
-            if (car.p[1] >= race_track->height()) {
-                car.v[1] = -160.0;
-            }
-            if (car.p[0] <= 0) {
-                car.v[0] = 100.0;
-            }
-            if (car.p[1] <= 0) {
-                car.v[1] = 160.0;
-            }
+
+            auto next_time = current_time + microseconds ((long long int)(dt*1000000.0));
+            std::this_thread::sleep_until(next_time);
+            current_time = next_time;
         }
 
 
