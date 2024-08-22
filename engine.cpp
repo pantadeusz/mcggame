@@ -38,6 +38,26 @@ this restriction will be considered a breach of this License.
 
 namespace mcggame {
 
+game_context_c::game_context_c(){
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) < 0) {
+        throw std::runtime_error(SDL_GetError());
+    }
+
+    if (SDL_CreateWindowAndRenderer(800, 500, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
+        throw std::runtime_error(SDL_GetError());
+    }
+
+    
+    SDL_RenderSetLogicalSize(renderer, game_view_width,game_view_height);
+}
+
+game_context_c::~game_context_c() {
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+
+    SDL_Quit();
+}
+
 void game_context(const std::function<void(SDL_Renderer *renderer)> &game_main) {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -52,6 +72,7 @@ void game_context(const std::function<void(SDL_Renderer *renderer)> &game_main) 
 
     
     SDL_RenderSetLogicalSize(renderer, game_view_width,game_view_height);
+
     game_main(renderer);
 
     SDL_DestroyRenderer(renderer);
@@ -104,22 +125,29 @@ position_t rotate_around(const position_t &p, const double &angle, const positio
 }
 
 double angle_crop_to_range(double a) {
-    if (std::abs(a) > std::abs(a + 2.0*M_PI)) a = a + 2.0*M_PI;
-    if (std::abs(a) > std::abs(a - 2.0*M_PI)) a = a - 2.0*M_PI;
+    if (a < -M_PI) a = a+M_PI*2.0;
+    if (a >= M_PI) a = a-M_PI*2.0;
+    // if (std::abs(a) > std::abs(a + 2.0*M_PI)) a = a + 2.0*M_PI;
+    // if (std::abs(a) > std::abs(a - 2.0*M_PI)) a = a - 2.0*M_PI;
     return a;
+}
+
+double vect_angle(const position_t &p){
+    if (~p <= 0.000000001) return 0.0;
+    auto n_v1 = p*(1.0/~p); ///< normalized v1
+    auto angle1 = std::atan2(n_v1[1], n_v1[0]);
+    return angle_crop_to_range(angle1);
 }
 
 // Function to calculate the rotation angle between two ordered arrays of points in 2D Euclidean space
 double angle_between_vectors(const position_t& v1,
                               const position_t& v2) {
-    auto n_v1 = v1*(1.0/~v1); ///< normalized v1
-    auto n_v2 = v2*(1.0/~v2); ///< normalized v2
-    auto angle1 = std::atan2(n_v1[1], n_v1[0]);
-    auto angle2 = std::atan2(n_v2[1], n_v2[0]);
-    auto a = angle2 - angle1;
+    auto a = vect_angle(v2) - vect_angle(v1);
     a = angle_crop_to_range(a);
     return a;
 }
+
+
 
 double angle_between_shapes(const std::vector<position_t>& shape1,
                               const std::vector<position_t>& shape2) {
@@ -130,12 +158,41 @@ double angle_between_shapes(const std::vector<position_t>& shape1,
         auto v1 = shape1[(i+1) % shape1.size()] - shape1[i];
         auto v2 = shape2[(i+1) % shape2.size()] - shape2[i];
         auto a = angle_between_vectors(v1,v2);
-        if (std::abs(a) > std::abs(a + 2.0*M_PI)) a = a + 2.0*M_PI;
-        if (std::abs(a) > std::abs(a - 2.0*M_PI)) a = a - 2.0*M_PI;
+        // if (std::abs(a) > std::abs(a + 2.0*M_PI)) a = a + 2.0*M_PI;
+        // if (std::abs(a) > std::abs(a - 2.0*M_PI)) a = a - 2.0*M_PI;
         angle_sum += a;
     }
     return angle_sum/(double)shape1.size();
 }
+
+class physical_point_c {
+    private:
+    position_t position;
+    position_t velocity;
+    position_t acceleration;
+    double angle;
+    public:
+
+    physical_point_c():angle(0.0) {
+    }
+
+    physical_point_c new_state(const double coefficient, const double dt) const {
+        physical_point_c updated;
+        updated.position = position + velocity * dt + acceleration*dt*dt/2.0;
+        updated.velocity = velocity + acceleration*dt;
+        updated.acceleration = acceleration;
+        if (~updated.velocity > 0.0) 
+        updated.angle = vect_angle(updated.velocity);
+        else updated.angle = angle;
+        return updated;
+    }
+
+    position_t pos() const {return position;}
+    position_t vel() const {return velocity;}
+    position_t acc() const {return acceleration;}
+    double ang() const {return angle;}
+};
+
 
 
 
@@ -146,6 +203,7 @@ std::array<position_t,3> update_phys_point(position_t p, position_t v, position_
     updated[2] = a;
     return updated;
 }
+
 position_t calculate_friction_acceleration(position_t v, const double coefficient) {
     //position_t a = {0.0,0.0};
     double l = ~v;

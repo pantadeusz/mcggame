@@ -75,6 +75,16 @@ double angle_crop_to_range(double a);
 std::array<position_t,3> update_phys_point(position_t p, position_t v, position_t a, const double dt);
 position_t calculate_friction_acceleration(position_t v, const double coefficient) ;
 
+
+class game_context_c {
+    SDL_Window *window;
+public:
+    SDL_Renderer *renderer;
+
+    game_context_c();
+    virtual ~game_context_c();
+};
+
 }
 
 #endif

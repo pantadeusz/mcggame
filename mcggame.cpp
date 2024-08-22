@@ -257,24 +257,31 @@ class car_t {
     car_t update(double dt) const {
         car_t ret = *this;
 
-
         auto friction = calculate_friction_acceleration(v, 0.5);
         auto input_v = input->get_state();
-        ret.angle = angle_crop_to_range(angle + input_v.p[0]*0.0001*~v);
+        
+        
         auto forward_vector = rotate_around({1.0,0.0}, ret.angle);
         auto backward_vector = rotate_around({-1.0,0.0}, ret.angle);
         auto forward_acceleration = forward_vector * input_v.p[1]*160.0;
+
         
+        
+
         if (~v > 0.0001) {
             auto angle_to_correct_a = angle_between_vectors(forward_vector, v);
             auto angle_to_correct_b = angle_between_vectors(backward_vector, v);
-            auto angle_to_correct = (std::abs(angle_to_correct_a) < std::abs(angle_to_correct_b))?angle_to_correct_a:angle_to_correct_b;
+            bool is_moving_forward = (std::abs(angle_to_correct_a) < std::abs(angle_to_correct_b));
+            auto angle_to_correct = is_moving_forward?angle_to_correct_a:angle_to_correct_b;
             auto movement_correction_angle = angle_to_correct * ((~v > 1.0)?0.02:0.9);
             if ((~v > 100.0) && (std::abs(angle_to_correct ) > 0.001)) {
                 // std::cout << "drifting " << ~v << std::endl;
                 friction = calculate_friction_acceleration(v, 0.9);
             }
             ret.v = rotate_around(ret.v,-movement_correction_angle);
+
+            if (is_moving_forward) ret.angle = angle_crop_to_range(angle + input_v.p[0]*0.0001*~v);
+            else ret.angle = angle_crop_to_range(angle + input_v.p[0]*(-0.0001)*~v);
         }
         
       
@@ -329,6 +336,19 @@ public:
         if (keyboard_state[SDL_SCANCODE_LEFT]) a[0] -= 1;
         if (keyboard_state[SDL_SCANCODE_UP]) a[1] += 1;
         if (keyboard_state[SDL_SCANCODE_DOWN]) a[1] -= 1;
+        return {a};
+    };
+};
+
+class input_joystick_c : public input_i {
+public:
+    input_state_t get_state() const {
+        auto keyboard_state = SDL_GetKeyboardState(nullptr);
+        position_t a = {0.0,0.0};
+        if (keyboard_state[SDL_SCANCODE_D]) a[0] += 1;
+        if (keyboard_state[SDL_SCANCODE_A]) a[0] -= 1;
+        if (keyboard_state[SDL_SCANCODE_W]) a[1] += 1;
+        if (keyboard_state[SDL_SCANCODE_S]) a[1] -= 1;
         return {a};
     };
 };
@@ -417,51 +437,60 @@ std::pair<car_t,std::vector<position_t>> find_best_corrected_position(car_t car_
 }
 }
 
+
+
 int mcg_main(int argc, char *argv[])
 {
+    using namespace std;
+    using namespace std::chrono;
+
     const double dt = 0.01;
+    game_context_c game;
+    SDL_Renderer *renderer = game.renderer;
 
-    game_context([=](SDL_Renderer *renderer){
-        using namespace std;
-        using namespace std::chrono;
+    SDL_Event event;
+    auto race_track = std::make_shared<race_track_t>("assets/map_01.bmp", renderer);
 
-        SDL_Event event;
-        auto race_track = std::make_shared<race_track_t>("assets/map_01.bmp", renderer);
+    std::vector<car_t> cars;
+    
+    position_t camera_position = {};
+    //double scale = 1.0;
+    bool game_continues = true;
 
-        car_t car = car_t::create(renderer, std::make_shared<input_keyboard_c>(), {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp");
-        std::map<Sint32,car_t> cars;
-        
-        position_t camera_position = {};
-        double scale = 1.0;
-        bool game_continues = true;
+    cars.push_back(place_car_on_race_track(*race_track.get(), car_t::create(renderer, std::make_shared<input_keyboard_c>(), {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp")));
+    cars.push_back(place_car_on_race_track(*race_track.get(), car_t::create(renderer, std::make_shared<input_joystick_c>(), {100.0,100.0}, {0.0, 0.0}, {0.0,0.0}, "assets/car_01.bmp")));
 
-        car = place_car_on_race_track(*race_track.get(),car);
-        high_resolution_clock::time_point current_time = high_resolution_clock::now();
-        std::vector<position_t> collisions_draw;
-        std::cout << "Game loop start" <<std::endl;
-        while (game_continues) {
-            while(SDL_PollEvent(&event)) {
-                if (event.type == SDL_QUIT) {
-                    game_continues = false;
-                } else if (event.type == SDL_JOYDEVICEADDED) {
-                    std::cout << "Joistick added" << event.jdevice.type << " : " << event.jdevice.which <<  std::endl;
-                } else if (event.type == SDL_JOYDEVICEREMOVED) {
-                    std::cout << "Joistick removed" << event.jdevice.type << " : " << event.jdevice.which <<  std::endl;
-                } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
-                    std::cout << "Controller added" << event.cdevice.type << " : " << event.cdevice.which <<  std::endl;
-                } else if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
-                    std::cout << "Controller removed" << event.cdevice.type << " : " << event.cdevice.which <<  std::endl;
-                }
+    high_resolution_clock::time_point current_time = high_resolution_clock::now();
+    std::vector<position_t> collisions_draw;
+    std::cout << "Game loop start" <<std::endl;
+    while (game_continues) {
+        while(SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                game_continues = false;
+            } else if (event.type == SDL_JOYDEVICEADDED) {
+                std::cout << "Joistick added " << event.jdevice.type << " : " << event.jdevice.which <<  std::endl;
+            } else if (event.type == SDL_JOYDEVICEREMOVED) {
+                std::cout << "Joistick removed " << event.jdevice.type << " : " << event.jdevice.which <<  std::endl;
+            } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
+                std::cout << "Controller added " << event.cdevice.type << " : " << event.cdevice.which <<  std::endl;
+            } else if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
+                std::cout << "Controller removed " << event.cdevice.type << " : " << event.cdevice.which <<  std::endl;
             }
-            auto keyboard_state = SDL_GetKeyboardState(nullptr);
-            if (keyboard_state[SDL_SCANCODE_INSERT]) scale *= 1.1;
-            if (keyboard_state[SDL_SCANCODE_DELETE]) scale *= 0.9;
-            
-            auto new_car = car.update(dt);
+        }
+        auto keyboard_state = SDL_GetKeyboardState(nullptr);
+        // if (keyboard_state[SDL_SCANCODE_INSERT]) scale *= 1.1;
+        // if (keyboard_state[SDL_SCANCODE_DELETE]) scale *= 0.9;
+        
+        std::vector<car_t> new_cars;
+        for (auto &car:cars)
+            new_cars.push_back(car.update(dt));
 
+        for (int i = 0; i < cars.size(); i++) {
+            auto car = cars[i];
+            auto new_car = new_cars[i];
             std::vector<position_t> collisions = check_collision(*new_car.collision_pts.get(), new_car.p, new_car.angle,race_track->_collision_map);
             if (collisions.size() > 0) {
-               collisions_draw = collisions;
+                collisions_draw = collisions;
 
 
                 auto [nncar, collisions] = heuristic::find_best_corrected_position(new_car, race_track);
@@ -493,33 +522,55 @@ int mcg_main(int argc, char *argv[])
                 car = new_car;
             }
 
-            camera_position = {car.p[0], car.p[1]};
+            new_cars[i] = car;
+        }
+        cars = new_cars;
+        position_t avg_pos = {0.0,0.0};
+        for (const auto &car:cars) {
+            std::cout << car.p  << " ";
+            avg_pos = avg_pos + car.p;
+        }
+        camera_position = avg_pos*(1.0/cars.size());
+        std::cout << avg_pos << "-> " << camera_position << std::endl;
 
-            SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0x00);
-            SDL_RenderClear(renderer);
+        SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0x00);
+        SDL_RenderClear(renderer);
 
-            SDL_SetRenderDrawColor(renderer, 0xff, 0x00, 0x00, 0xff);
+        SDL_SetRenderDrawColor(renderer, 0xff, 0x00, 0x00, 0xff);
 
-
-            race_track->draw(camera_position[0], camera_position[1],scale);
-            car.draw(camera_position, scale);
-
-            // for (auto p: collisions_draw) {
-            //     p = race_track_t::to_screen_coordinates(p, camera_position, scale);
-            //     SDL_RenderDrawPoint(renderer, p[0], p[1]);
-            //     std:: cout << p << "  " << camera_position << std::endl;
-            // }
-
-
-            SDL_RenderPresent(renderer);
-
-            auto next_time = current_time + microseconds ((long long int)(dt*1000000.0));
-            std::this_thread::sleep_until(next_time);
-            current_time = next_time;
+        double scale = 1.0;
+        {
+        std::vector<SDL_Point> points;
+        SDL_Rect result;
+        for (const auto &c:cars) points.push_back({(int)c.p[0],(int)c.p[1]});
+        SDL_EnclosePoints(points.data(),
+                                points.size(),
+                                nullptr,
+                                &result);
+        scale = 400.0/std::max(result.w, result.h);
+        if (scale > 2.0) scale = 2.0;
+        std::cout << scale << std::endl;
         }
 
+        race_track->draw(camera_position[0], camera_position[1],scale);
+        for (auto &car: cars)
+            car.draw(camera_position, scale);
 
-    });
+        // for (auto p: collisions_draw) {
+        //     p = race_track_t::to_screen_coordinates(p, camera_position, scale);
+        //     SDL_RenderDrawPoint(renderer, p[0], p[1]);
+        //     std:: cout << p << "  " << camera_position << std::endl;
+        // }
+
+
+        SDL_RenderPresent(renderer);
+
+        auto next_time = current_time + microseconds ((long long int)(dt*1000000.0));
+        std::this_thread::sleep_until(next_time);
+        current_time = next_time;
+    }
+
+
 
 
 
